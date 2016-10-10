@@ -16,6 +16,7 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 	"golang.org/x/net/context"
 
+	"github.com/dgraph-io/dgraph/commit"
 	"github.com/dgraph-io/dgraph/task"
 	"github.com/dgraph-io/dgraph/x"
 )
@@ -74,11 +75,13 @@ type node struct {
 	ctx         context.Context
 	done        chan struct{}
 	id          uint64
+	gid         uint32
 	peers       peerPool
 	props       proposals
 	raft        raft.Node
 	store       *raft.MemoryStorage
 	raftContext []byte
+	wal         *commit.Logger
 }
 
 func (n *node) Connect(pid uint64, addr string) {
@@ -236,8 +239,28 @@ func (n *node) process(e raftpb.Entry) error {
 	return nil
 }
 
-func (n *node) saveToStorage(s raftpb.Snapshot, h raftpb.HardState,
-	es []raftpb.Entry) {
+func (n *node) storeToWal(h raftpb.HardState, es []raftpb.Entry) {
+	for _, e := range es {
+		eb, err := e.Marshal()
+		x.Check(err)
+		_, err = n.wal.AddLog(n.gid, commit.RaftEntry, eb)
+		x.Check(err)
+	}
+
+	if raft.IsEmptyHardState(h) {
+		return
+	}
+	hs, err := h.Marshal()
+	x.Check(err)
+	_, err = n.wal.AddLog(n.gid, commit.RaftHardState, hs)
+	x.Check(err)
+}
+
+func (n *node) saveToStorage(s raftpb.Snapshot, h raftpb.HardState, es []raftpb.Entry) {
+	if n.wal != nil {
+		n.storeToWal(h, es)
+	}
+
 	if !raft.IsEmptySnap(s) {
 		fmt.Printf("saveToStorage snapshot: %v\n", s.String())
 		le, err := n.store.LastIndex()
@@ -254,15 +277,13 @@ func (n *node) saveToStorage(s raftpb.Snapshot, h raftpb.HardState,
 			return
 		}
 
-		if err := n.store.ApplySnapshot(s); err != nil {
-			log.Fatalf("Applying snapshot: %v", err)
-		}
+		x.Check(n.store.ApplySnapshot(s))
 	}
 
 	if !raft.IsEmptyHardState(h) {
-		n.store.SetHardState(h)
+		x.Check(n.store.SetHardState(h))
 	}
-	n.store.Append(es)
+	x.Check(n.store.Append(es))
 }
 
 func (n *node) processSnapshot(s raftpb.Snapshot) {
@@ -398,7 +419,7 @@ func createRaftContext(id uint64, gid uint32, addr string) []byte {
 	return b.Bytes[b.Head():]
 }
 
-func newNode(gid uint32, id uint64, myAddr string) *node {
+func newNode(gid uint32, id uint64, myAddr string, clog *commit.Logger) *node {
 	fmt.Printf("NEW NODE ID: %v\n", id)
 
 	peers := peerPool{
@@ -412,6 +433,7 @@ func newNode(gid uint32, id uint64, myAddr string) *node {
 	n := &node{
 		ctx:   context.TODO(),
 		id:    id,
+		gid:   gid,
 		store: store,
 		cfg: &raft.Config{
 			ID:              id,
@@ -424,6 +446,7 @@ func newNode(gid uint32, id uint64, myAddr string) *node {
 		peers:       peers,
 		props:       props,
 		raftContext: createRaftContext(id, gid, myAddr),
+		wal:         clog,
 	}
 	return n
 }

@@ -256,6 +256,7 @@ func (l *Logger) filepath(ts int64) string {
 type Header struct {
 	ts   int64
 	hash uint32
+	typ  EntryType
 	size int32
 }
 
@@ -265,6 +266,7 @@ func parseHeader(hdr []byte) (Header, error) {
 	var err error
 	setError(&err, binary.Read(buf, binary.LittleEndian, &h.ts))
 	setError(&err, binary.Read(buf, binary.LittleEndian, &h.hash))
+	setError(&err, binary.Read(buf, binary.LittleEndian, &h.typ))
 	setError(&err, binary.Read(buf, binary.LittleEndian, &h.size))
 	if err != nil {
 		return h, err
@@ -374,7 +376,14 @@ func setError(prev *error, n error) {
 	return
 }
 
-func (l *Logger) AddLog(hash uint32, value []byte) (int64, error) {
+type EntryType int32
+
+const (
+	RaftEntry EntryType = iota + 1
+	RaftHardState
+)
+
+func (l *Logger) AddLog(hash uint32, typ EntryType, value []byte) (int64, error) {
 	// 16 bytes to write the ts, hash and len(value) later.
 	lbuf := int64(len(value)) + 16
 	if l.curFile().Size()+lbuf > l.maxSize {
@@ -403,6 +412,7 @@ func (l *Logger) AddLog(hash uint32, value []byte) (int64, error) {
 	var err error
 	setError(&err, binary.Write(buf, binary.LittleEndian, ts))
 	setError(&err, binary.Write(buf, binary.LittleEndian, hash))
+	setError(&err, binary.Write(buf, binary.LittleEndian, int32(typ)))
 	setError(&err, binary.Write(buf, binary.LittleEndian, int32(len(value))))
 	_, nerr := buf.Write(value)
 	setError(&err, nerr)

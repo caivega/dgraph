@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"sync"
 
+	"github.com/dgraph-io/dgraph/commit"
 	"github.com/dgraph-io/dgraph/task"
 	"github.com/dgraph-io/dgraph/x"
 )
@@ -39,15 +40,15 @@ func groups() *groupi {
 	return gr
 }
 
-func StartRaftNodes(raftId uint64, my, cluster, peer string) {
-	node := groups().InitNode(math.MaxUint32, raftId, my)
+func StartRaftNodes(raftId uint64, my, cluster, peer string, clog *commit.Logger) {
+	node := groups().InitNode(math.MaxUint32, raftId, my, clog)
 	node.StartNode(cluster)
 	if len(peer) > 0 {
 		go node.JoinCluster(peer, ws)
 	}
 
 	// Also create node for group zero, which would handle UID assignment.
-	node = groups().InitNode(0, raftId, my)
+	node = groups().InitNode(0, raftId, my, clog)
 	node.StartNode(cluster)
 	if len(peer) > 0 {
 		go node.JoinCluster(peer, ws)
@@ -69,14 +70,14 @@ func (g *groupi) ServesGroup(groupId uint32) bool {
 	return has
 }
 
-func (g *groupi) InitNode(groupId uint32, nodeId uint64, publicAddr string) *node {
+func (g *groupi) InitNode(groupId uint32, nodeId uint64, publicAddr string, clog *commit.Logger) *node {
 	g.Lock()
 	defer g.Unlock()
 	if g.local == nil {
 		g.local = make(map[uint32]*node)
 	}
 
-	node := newNode(groupId, nodeId, publicAddr)
+	node := newNode(groupId, nodeId, publicAddr, clog)
 	if _, has := g.local[groupId]; has {
 		x.Assertf(false, "Didn't expect a node in RAFT group mapping: %v", groupId)
 	}

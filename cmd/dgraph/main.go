@@ -37,6 +37,7 @@ import (
 	"golang.org/x/net/trace"
 	"google.golang.org/grpc"
 
+	"github.com/dgraph-io/dgraph/commit"
 	"github.com/dgraph-io/dgraph/gql"
 	"github.com/dgraph-io/dgraph/posting"
 	"github.com/dgraph-io/dgraph/query"
@@ -642,13 +643,15 @@ func main() {
 	worker.SetState(ps)
 	uid.Init(ps)
 
+	clog := commit.NewLogger(*mutationDir, "wal", 50<<20)
+
 	my := "localhost" + *workerPort
 
 	// TODO: Clean up the RAFT group creation code.
 
 	// First initiate the commmon group across the entire cluster. This group
 	// stores information about which server serves which groups.
-	go worker.StartRaftNodes(*raftId, my, *cluster, *peer)
+	go worker.StartRaftNodes(*raftId, my, *cluster, *peer, clog)
 
 	if len(*schemaFile) > 0 {
 		err = schema.Parse(*schemaFile)
