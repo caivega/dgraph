@@ -2,10 +2,12 @@ package worker
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"sync"
 
+	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/dgraph-io/dgraph/commit"
 	"github.com/dgraph-io/dgraph/task"
 	"github.com/dgraph-io/dgraph/x"
@@ -41,18 +43,31 @@ func groups() *groupi {
 }
 
 func StartRaftNodes(raftId uint64, my, cluster, peer string, clog *commit.Logger) {
-	node := groups().InitNode(math.MaxUint32, raftId, my, clog)
-	node.StartNode(cluster)
-	if len(peer) > 0 {
-		go node.JoinCluster(peer, ws)
-	}
-
+	groups().InitNode(math.MaxUint32, raftId, my, clog)
 	// Also create node for group zero, which would handle UID assignment.
-	node = groups().InitNode(0, raftId, my, clog)
-	node.StartNode(cluster)
-	if len(peer) > 0 {
-		go node.JoinCluster(peer, ws)
-	}
+	groups().InitNode(0, raftId, my, clog)
+
+	clog.StreamEntries(0, func(hdr commit.Header, data []byte) {
+		node := groups().Node(hdr.Hash)
+		if hdr.Typ == commit.RaftHardState {
+			var h raftpb.HardState
+			x.Check(h.Unmarshal(data))
+			x.Check(node.store.SetHardState(h))
+			return
+		}
+
+		if hdr.Typ == commit.RaftEntry {
+			var e raftpb.Entry
+			x.Check(e.Unmarshal(data))
+			entries := make([]raftpb.Entry, 1)
+			entries[0] = e
+			x.Check(node.store.Append(entries))
+			return
+		}
+		log.Fatalf("We only support two types of commit entries. Found: %+v", hdr)
+	})
+
+	groups().startAllLocalNodes(cluster, peer)
 }
 
 func (g *groupi) Node(groupId uint32) *node {
@@ -61,6 +76,15 @@ func (g *groupi) Node(groupId uint32) *node {
 	n, has := g.local[groupId]
 	x.Assertf(has, "Node should be present for group: %v", groupId)
 	return n
+}
+
+func (g *groupi) startAllLocalNodes(cluster, peer string) {
+	g.RLock()
+	defer g.RUnlock()
+	for _, n := range g.local {
+		n.StartNode(cluster)
+		go n.JoinCluster(peer, ws)
+	}
 }
 
 func (g *groupi) ServesGroup(groupId uint32) bool {

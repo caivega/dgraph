@@ -255,8 +255,8 @@ func (l *Logger) filepath(ts int64) string {
 
 type Header struct {
 	ts   int64
-	hash uint32
-	typ  EntryType
+	Hash uint32
+	Typ  EntryType
 	size int32
 }
 
@@ -265,8 +265,8 @@ func parseHeader(hdr []byte) (Header, error) {
 	var h Header
 	var err error
 	setError(&err, binary.Read(buf, binary.LittleEndian, &h.ts))
-	setError(&err, binary.Read(buf, binary.LittleEndian, &h.hash))
-	setError(&err, binary.Read(buf, binary.LittleEndian, &h.typ))
+	setError(&err, binary.Read(buf, binary.LittleEndian, &h.Hash))
+	setError(&err, binary.Read(buf, binary.LittleEndian, &h.Typ))
 	setError(&err, binary.Read(buf, binary.LittleEndian, &h.size))
 	if err != nil {
 		return h, err
@@ -437,8 +437,7 @@ func (l *Logger) AddLog(hash uint32, typ EntryType, value []byte) (int64, error)
 
 // streamEntries allows for hash to be zero.
 // This means iterate over all the entries.
-func streamEntriesInFile(path string,
-	afterTs int64, hash uint32, iter LogIterator) error {
+func streamEntriesInFile(path string, afterTs int64, iter LogIterator) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -467,7 +466,7 @@ func streamEntriesInFile(path string,
 			return err
 		}
 
-		if (hash == 0 || hdr.hash == hash) && hdr.ts >= afterTs {
+		if hdr.ts >= afterTs {
 			data := make([]byte, hdr.size)
 			n, err := reader.Read(data)
 			if err != nil {
@@ -491,9 +490,7 @@ func streamEntriesInFile(path string,
 
 type LogIterator func(hdr Header, record []byte)
 
-func (l *Logger) StreamEntries(afterTs int64, hash uint32,
-	iter LogIterator) error {
-
+func (l *Logger) StreamEntries(afterTs int64, iter LogIterator) error {
 	if atomic.LoadInt64(&l.lastLogTs) < afterTs {
 		return nil
 	}
@@ -515,7 +512,7 @@ func (l *Logger) StreamEntries(afterTs int64, hash uint32,
 	}
 
 	for _, path := range paths {
-		if err := streamEntriesInFile(path, afterTs, hash, iter); err != nil {
+		if err := streamEntriesInFile(path, afterTs, iter); err != nil {
 			return err
 		}
 	}
